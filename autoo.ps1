@@ -1,0 +1,414 @@
+#!/usr/bin/env pwsh
+
+param(
+	[Parameter(Mandatory = $false)]
+	[switch]$Help,
+
+	[Parameter(Mandatory = $false)]
+	[string]$ProjectDir = '',
+
+	[Parameter(Mandatory = $false)]
+	[int]$MaxIterations = 0,  # 0 means unlimited
+
+	[Parameter(Mandatory = $false)]
+	[string]$Spec = '',
+
+	[Parameter(Mandatory = $false)]
+	[int]$Timeout = 600,  # Default to 600 seconds
+
+	[Parameter(Mandatory = $false)]
+	[int]$IdleTimeout = 180,
+
+	[Parameter(Mandatory = $false)]
+	[string]$Model = '',
+
+	[Parameter(Mandatory = $false)]
+	[string]$InitModel = '',
+
+	[Parameter(Mandatory = $false)]
+	[string]$CodeModel = '',
+
+	[Parameter(Mandatory = $false)]
+	[switch]$NoClean
+
+	,
+	[Parameter(Mandatory = $false)]
+	[int]$QuitOnAbort = 0
+)
+
+# Show help if requested
+if ($Help) {
+	Write-Host 'Usage: autoo.ps1 -ProjectDir <dir> [-Spec <file>] [-MaxIterations <num>] [-Timeout <seconds>] [-IdleTimeout <seconds>] [-Model <model>] [-InitModel <model>] [-CodeModel <model>] [-NoClean] [-QuitOnAbort <num>] [-Help]'
+	Write-Host ''
+	Write-Host 'Options:'
+	Write-Host '  -ProjectDir       Project directory (required)'
+	Write-Host '  -Spec             Specification file (optional for existing codebases, required for new projects)'
+	Write-Host '  -MaxIterations    Maximum iterations (optional, unlimited if not specified)'
+	Write-Host '  -Timeout          Timeout in seconds (optional, default: 600)'
+	Write-Host '  -IdleTimeout      Abort if opencode produces no output for N seconds (optional, default: 180)'
+	Write-Host '  -Model            Model to use (optional)'
+	Write-Host '  -InitModel        Model to use for initializer/onboarding prompts (optional, overrides -Model)'
+	Write-Host '  -CodeModel        Model to use for coding prompt (optional, overrides -Model)'
+	Write-Host '  -NoClean          Skip log cleaning on exit (optional)'
+	Write-Host '  -QuitOnAbort      Quit after N consecutive failures (optional, default: 0=continue indefinitely)'
+	Write-Host '  -Help             Show this help message'
+	Write-Host ''
+	exit 0
+}
+
+# Check required parameters
+if ($ProjectDir -eq '') {
+	Write-Error 'Error: Missing required argument -ProjectDir'
+	Write-Host 'Use -Help for usage information'
+	exit 1
+}
+
+# Function to check if directory is an existing codebase
+function Test-ExistingCodebase {
+	param(
+		[Parameter(Mandatory = $true)]
+		[string]$Directory
+	)
+
+	if (Test-Path $Directory -PathType Container) {
+		# Check if directory has files excluding common ignored directories
+		$hasFiles = Get-ChildItem -Path $Directory -Force | Where-Object {
+			$_.Name -notin @('.git', '.autoo', '.DS_Store', 'node_modules', '.vscode', '.idea')
+		} | Measure-Object | Select-Object -ExpandProperty Count
+
+		return $hasFiles -gt 0
+	}
+	return $false
+}
+
+# Check if spec is required (only for new/empty project directories)
+$NeedsSpec = $false
+if ((-not (Test-Path $ProjectDir -PathType Container)) -or (-not (Test-ExistingCodebase -Directory $ProjectDir))) {
+	$NeedsSpec = $true
+}
+
+if ($NeedsSpec -and $Spec -eq '') {
+	Write-Error 'Error: Missing required argument -Spec (required for new projects or when spec.txt does not exist)'
+	Write-Host 'Use -Help for usage information'
+	exit 1
+}
+
+$effectiveInitModel = $Model
+if ($InitModel -ne '') { $effectiveInitModel = $InitModel }
+
+$effectiveCodeModel = $Model
+if ($CodeModel -ne '') { $effectiveCodeModel = $CodeModel }
+
+$noAssistantPattern = 'The model returned no assistant messages'
+$providerErrorPattern = 'Provider returned error'
+
+function Invoke-OpenCodePrompt {
+	param(
+		[Parameter(Mandatory = $true)]
+		[string]$ProjectDir,
+
+		[Parameter(Mandatory = $true)]
+		[string]$PromptPath,
+
+		[Parameter(Mandatory = $false)]
+		[string]$EffectiveModel
+	)
+
+	$opencodeArgs = @('run')
+	if ($EffectiveModel -ne '') { $opencodeArgs += @('--model', $EffectiveModel) }
+
+	# Start the process with timeout using PowerShell's job system
+	$job = Start-Job -ScriptBlock {
+		param($ProjectDir, $PromptPath, $Timeout, $opencodeArgs)
+		Set-Location $ProjectDir
+		$promptText = Get-Content -Path $PromptPath -Raw
+		$promptText | & opencode $opencodeArgs
+	} -ArgumentList $ProjectDir, $PromptPath, $Timeout, $opencodeArgs
+
+	# Wait for job to complete with timeout
+	$completed = Wait-Job -Job $job -Timeout $Timeout
+
+	if (-not $completed) {
+		Write-Error "autoo.ps1: timeout (${Timeout}s) waiting for opencode to complete; aborting."
+		Remove-Job -Job $job -Force
+		return 73
+	}
+
+	# Get job results
+	$output = Receive-Job -Job $job
+	$output | ForEach-Object { Write-Output $_ }
+	$exitCode = 0 # Default success
+	if ($job.State -ne 'Completed') {
+		$exitCode = 1
+	}
+
+	Remove-Job -Job $job
+
+	return $exitCode
+}
+
+function Get-NextIterationLogIndex {
+	param(
+		[Parameter(Mandatory = $true)]
+		[string]$IterationsDir
+	)
+
+	$max = 0
+	if (Test-Path $IterationsDir -PathType Container) {
+		Get-ChildItem -Path $IterationsDir -Filter '*.log' -File -ErrorAction SilentlyContinue | ForEach-Object {
+			$name = [System.IO.Path]::GetFileNameWithoutExtension($_.Name)
+			if ($name -match '^[0-9]+$') {
+				$num = [int]$name
+				if ($num -gt $max) { $max = $num }
+			}
+		}
+	}
+
+	return ($max + 1)
+}
+
+# Function to clean logs on exit
+function Clear-IterationLogs {
+	param(
+		[Parameter(Mandatory = $true)]
+		[string]$IterationsDir
+	)
+
+	if ($NoClean) {
+		Write-Host 'Skipping log cleanup (-NoClean flag set).'
+		return
+	}
+
+	Write-Host 'Cleaning iteration logs...'
+	if ((Test-Path $IterationsDir -PathType Container) -and (Get-ChildItem -Path $IterationsDir -Filter '*.log' -File -ErrorAction SilentlyContinue)) {
+		$CleanLogsScript = Join-Path $PSScriptRoot 'clean-logs.js'
+		& node $CleanLogsScript $IterationsDir --no-backup
+		Write-Host 'Log cleanup complete.'
+	}
+}
+
+# Function to copy artifacts to .autoo directory
+function Copy-Artifacts {
+	param(
+		[Parameter(Mandatory = $true)]
+		[string]$ProjectDir
+	)
+
+	Write-Host "Copying artifacts to '$ProjectDir/.autoo'..."
+	$ArtifactsSource = Join-Path $PSScriptRoot 'artifacts'
+	$ProjectautooDir = Join-Path $ProjectDir '.autoo'
+	New-Item -ItemType Directory -Path $ProjectautooDir -Force | Out-Null
+	# Copy all artifacts contents, but don't overwrite existing files
+	Get-ChildItem -Path $ArtifactsSource -Force | ForEach-Object {
+		$DestinationPath = Join-Path $ProjectautooDir $_.Name
+		if (-not (Test-Path $DestinationPath)) {
+			Copy-Item -Path $_.FullName -Destination $ProjectautooDir -Recurse
+		}
+	}
+}
+
+# Set up trap to clean logs on script exit (both normal and interrupted)
+$cleanupScript = {
+	Clear-IterationLogs -IterationsDir $IterationsDir
+}
+# Register cleanup for normal exit, Ctrl+C, and script termination
+try {
+	$null = Register-EngineEvent -SourceIdentifier PowerShell.Exiting -Action $cleanupScript -ErrorAction SilentlyContinue
+} catch { }
+# Handle Ctrl+C
+[Console]::TreatControlCAsInput = $false
+
+# Ensure project directory exists (create if missing)
+if (-not (Test-Path $ProjectDir -PathType Container)) {
+	Write-Host "Project directory '$ProjectDir' does not exist; creating it..."
+	New-Item -ItemType Directory -Path $ProjectDir -Force | Out-Null
+	$script:NewProjectCreated = $true
+
+	# Copy scaffolding files to the new project directory (including hidden files)
+	Write-Host "Copying scaffolding files to '$ProjectDir'..."
+	$ScaffoldingSource = Join-Path $PSScriptRoot 'scaffolding'
+	# Copy both regular and hidden files
+	Get-ChildItem -Path $ScaffoldingSource -Force | ForEach-Object {
+		Copy-Item -Path $_.FullName -Destination $ProjectDir -Recurse -Force
+	}
+
+	# Copy artifacts contents to project's .autoo folder
+	Write-Host "Copying artifacts to '$ProjectDir/.autoo'..."
+	$ArtifactsSource = Join-Path $PSScriptRoot 'artifacts'
+	$ProjectautooDir = Join-Path $ProjectDir '.autoo'
+	New-Item -ItemType Directory -Path $ProjectautooDir -Force | Out-Null
+	# Copy all artifacts contents
+	Get-ChildItem -Path $ArtifactsSource -Force | ForEach-Object {
+		Copy-Item -Path $_.FullName -Destination $ProjectautooDir -Recurse -Force
+	}
+} else {
+	$script:NewProjectCreated = $false
+	# Check if this is an existing codebase
+	if (Test-ExistingCodebase -Directory $ProjectDir) {
+		Write-Host "Detected existing codebase in '$ProjectDir'"
+	}
+}
+
+# Check if spec file exists (only if provided)
+if ($Spec -ne '' -and (-not (Test-Path $Spec -PathType Leaf))) {
+	Write-Error "Error: Spec file '$Spec' does not exist"
+	exit 1
+}
+
+# Define the paths to check
+$SpecCheckPath = Join-Path $ProjectDir '.autoo/spec.txt'
+$FeatureListCheckPath = Join-Path $ProjectDir '.autoo/feature_list.json'
+
+# Iteration transcript logs
+$IterationsDir = Join-Path $ProjectDir '.autoo/iterations'
+New-Item -ItemType Directory -Path $IterationsDir -Force | Out-Null
+$NextLogIndex = Get-NextIterationLogIndex -IterationsDir $IterationsDir
+
+$ConsecutiveFailures = 0
+
+# Check for project_dir/.autoo/spec.txt
+try {
+	if ($MaxIterations -eq 0) {
+		Write-Host 'Running unlimited iterations (use Ctrl+C to stop)'
+		$i = 1
+		while ($true) {
+			$logFile = Join-Path $IterationsDir ('{0}.log' -f $NextLogIndex.ToString('D3'))
+			$NextLogIndex++
+
+			Write-Host "Iteration $i"
+			Write-Host "Transcript: $logFile"
+			Write-Host "Started: $(Get-Date -Format o)"
+
+			try {
+				Start-Transcript -Path $logFile -Force | Out-Null
+
+				# Check if onboarding is already complete
+				$OnboardingComplete = $false
+				if (Test-Path $FeatureListCheckPath -PathType Leaf) {
+					# Check if feature_list.json contains actual data (not just template)
+					$content = Get-Content $FeatureListCheckPath -Raw
+					if ($content -notmatch '\{yyyy-mm-dd\}' -and $content -notmatch '\{Short name of the feature\}') {
+						$OnboardingComplete = $true
+					}
+				}
+
+				$opencodeExitCode = 0
+				if (-not (Test-Path $SpecCheckPath -PathType Leaf) -or -not (Test-Path $FeatureListCheckPath -PathType Leaf) -or -not $OnboardingComplete) {
+					if ((-not $script:NewProjectCreated) -and (Test-ExistingCodebase -Directory $ProjectDir) -and ((-not (Test-Path "$ProjectDir/.autoo/spec.txt" -PathType Leaf)) -or (-not (Test-Path "$ProjectDir/.autoo/feature_list.json" -PathType Leaf)) -or -not $OnboardingComplete)) {
+						if (-not $OnboardingComplete) {
+							Write-Host 'Detected incomplete onboarding, resuming onboarding prompt...'
+						} else {
+							Write-Host 'Detected existing codebase, using onboarding prompt...'
+						}
+						Copy-Artifacts -ProjectDir $ProjectDir
+						$opencodeExitCode = Invoke-OpenCodePrompt -ProjectDir $ProjectDir -PromptPath "$PSScriptRoot/prompts/onboarding.md" -EffectiveModel $effectiveInitModel
+					} else {
+						Write-Host 'Required files not found, copying spec and sending initializer prompt...'
+						Copy-Artifacts -ProjectDir $ProjectDir
+						if ($Spec -ne '') {
+							Copy-Item $Spec $SpecCheckPath
+						}
+						$opencodeExitCode = Invoke-OpenCodePrompt -ProjectDir $ProjectDir -PromptPath "$PSScriptRoot/prompts/initializer.md" -EffectiveModel $effectiveInitModel
+					}
+				} else {
+					Write-Host 'Required files found, sending coding prompt...'
+					$opencodeExitCode = Invoke-OpenCodePrompt -ProjectDir $ProjectDir -PromptPath "$PSScriptRoot/prompts/coding.md" -EffectiveModel $effectiveCodeModel
+				}
+
+				if ($opencodeExitCode -ne 0) {
+					$ConsecutiveFailures++
+					Write-Error "autoo.ps1: opencode failed (exit=$opencodeExitCode); this is failure #$ConsecutiveFailures."
+					if ($QuitOnAbort -gt 0 -and $ConsecutiveFailures -ge $QuitOnAbort) {
+						Write-Error "autoo.ps1: reached failure threshold ($QuitOnAbort); quitting."
+						exit $opencodeExitCode
+					}
+					Write-Error "autoo.ps1: continuing to next iteration (threshold: $QuitOnAbort)."
+				} else {
+					$ConsecutiveFailures = 0
+				}
+
+				Write-Host "--- End of iteration $i ---"
+				Write-Host "Finished: $(Get-Date -Format o)"
+				Write-Host ''
+			} finally {
+				try { Stop-Transcript | Out-Null } catch { }
+			}
+
+			$i++
+		}
+	} else {
+		Write-Host "Running $MaxIterations iterations"
+		for ($i = 1; $i -le $MaxIterations; $i++) {
+			$logFile = Join-Path $IterationsDir ('{0}.log' -f $NextLogIndex.ToString('D3'))
+			$NextLogIndex++
+
+			Write-Host "Iteration $i of $MaxIterations"
+			Write-Host "Transcript: $logFile"
+			Write-Host "Started: $(Get-Date -Format o)"
+
+			try {
+				Start-Transcript -Path $logFile -Force | Out-Null
+
+				# Check if onboarding is already complete
+				$OnboardingComplete = $false
+				if (Test-Path $FeatureListCheckPath -PathType Leaf) {
+					# Check if feature_list.json contains actual data (not just template)
+					$content = Get-Content $FeatureListCheckPath -Raw
+					if ($content -notmatch '\{yyyy-mm-dd\}' -and $content -notmatch '\{Short name of the feature\}') {
+						$OnboardingComplete = $true
+					}
+				}
+
+				$opencodeExitCode = 0
+				if (-not (Test-Path $SpecCheckPath -PathType Leaf) -or -not (Test-Path $FeatureListCheckPath -PathType Leaf) -or -not $OnboardingComplete) {
+					if ((-not $script:NewProjectCreated) -and (Test-ExistingCodebase -Directory $ProjectDir) -and ((-not (Test-Path "$ProjectDir/.autoo/spec.txt" -PathType Leaf)) -or (-not (Test-Path "$ProjectDir/.autoo/feature_list.json" -PathType Leaf)) -or -not $OnboardingComplete)) {
+						if (-not $OnboardingComplete) {
+							Write-Host 'Detected incomplete onboarding, resuming onboarding prompt...'
+						} else {
+							Write-Host 'Detected existing codebase, using onboarding prompt...'
+						}
+						Copy-Artifacts -ProjectDir $ProjectDir
+						$opencodeExitCode = Invoke-OpenCodePrompt -ProjectDir $ProjectDir -PromptPath "$PSScriptRoot/prompts/onboarding.md" -EffectiveModel $effectiveInitModel
+					} else {
+						Write-Host 'Required files not found, copying spec and sending initializer prompt...'
+						Copy-Artifacts -ProjectDir $ProjectDir
+						if ($Spec -ne '') {
+							Copy-Item $Spec $SpecCheckPath
+						}
+						$opencodeExitCode = Invoke-OpenCodePrompt -ProjectDir $ProjectDir -PromptPath "$PSScriptRoot/prompts/initializer.md" -EffectiveModel $effectiveInitModel
+					}
+				} else {
+					Write-Host 'Required files found, sending coding prompt...'
+					$opencodeExitCode = Invoke-OpenCodePrompt -ProjectDir $ProjectDir -PromptPath "$PSScriptRoot/prompts/coding.md" -EffectiveModel $effectiveCodeModel
+				}
+
+				if ($opencodeExitCode -ne 0) {
+					$ConsecutiveFailures++
+					Write-Error "autoo.ps1: opencode failed (exit=$opencodeExitCode); this is failure #$ConsecutiveFailures."
+					if ($QuitOnAbort -gt 0 -and $ConsecutiveFailures -ge $QuitOnAbort) {
+						Write-Error "autoo.ps1: reached failure threshold ($QuitOnAbort); quitting."
+						exit $opencodeExitCode
+					}
+					Write-Error "autoo.ps1: continuing to next iteration (threshold: $QuitOnAbort)."
+				} else {
+					$ConsecutiveFailures = 0
+				}
+
+				# If this is not the last iteration, add a separator
+				if ($i -lt $MaxIterations) {
+					Write-Host "--- End of iteration $i ---"
+					Write-Host "Finished: $(Get-Date -Format o)"
+					Write-Host ''
+				} else {
+					Write-Host "Finished: $(Get-Date -Format o)"
+					Write-Host ''
+				}
+			} finally {
+				try { Stop-Transcript | Out-Null } catch { }
+			}
+		}
+	}
+} finally {
+	# Ensure cleanup runs even on error or interruption
+	Clear-IterationLogs -IterationsDir $IterationsDir
+}
