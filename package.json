@@ -1,11 +1,11 @@
 {
-	"name": "autoo",
+	"name": "aidd-o",
 	"version": "1.1.0",
-	"description": "OpenCode Autonomous Coding Agent",
+	"description": "AI Development Driver: OpenCode",
 	"type": "module",
-	"main": "./autoo.sh",
+	"main": "./aidd-o.sh",
 	"scripts": {
-		"start": "bun ./autoo.sh",
+		"start": "bun ./aidd-o.sh",
 		"format": "prettier --write ."
 	},
 	"devDependencies": {
