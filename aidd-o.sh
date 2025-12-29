@@ -139,13 +139,13 @@ run_opencode_prompt() {
             echo "$line"
             if [[ "$line" == *"$NO_ASSISTANT_PATTERN"* ]]; then
                 saw_no_assistant=true
-                echo "autoo.sh: detected 'no assistant messages' from model; aborting." >&2
+                echo "aidd-o.sh: detected 'no assistant messages' from model; aborting." >&2
                 kill -TERM "$OPENCODE_PROC_PID" 2>/dev/null || true
                 break
             fi
             if [[ "$line" == *"$PROVIDER_ERROR_PATTERN"* ]]; then
                 saw_provider_error=true
-                echo "autoo.sh: detected 'provider error' from model; aborting." >&2
+                echo "aidd-o.sh: detected 'provider error' from model; aborting." >&2
                 kill -TERM "$OPENCODE_PROC_PID" 2>/dev/null || true
                 break
             fi
@@ -154,7 +154,7 @@ run_opencode_prompt() {
 
         if kill -0 "$OPENCODE_PROC_PID" 2>/dev/null; then
             saw_idle_timeout=true
-            echo "autoo.sh: idle timeout (${IDLE_TIMEOUT}s) waiting for opencode output; aborting." >&2
+            echo "aidd-o.sh: idle timeout (${IDLE_TIMEOUT}s) waiting for opencode output; aborting." >&2
             kill -TERM "$OPENCODE_PROC_PID" 2>/dev/null || true
             break
         fi
@@ -180,14 +180,38 @@ run_opencode_prompt() {
     return "$exit_code"
 }
 
+# Function to find or create metadata directory
+find_or_create_metadata_dir() {
+    local dir="$1"
+    # Check for existing directories in order of preference
+    if [[ -d "$dir/.auto" ]]; then
+        echo "$dir/.auto"
+        return
+    fi
+    if [[ -d "$dir/.autok" ]]; then
+        echo "$dir/.autok"
+        return
+    fi
+    if [[ -d "$dir/.automaker" ]]; then
+        echo "$dir/.automaker"
+        return
+    fi
+    # Create .auto as default
+    mkdir -p "$dir/.auto"
+    echo "$dir/.auto"
+}
+
 # Function to check if directory is an existing codebase
 is_existing_codebase() {
     local dir="$1"
-    # Check if directory exists and has files (excluding .git and .autoo)
+    # Check if directory exists and has files (excluding .git and metadata directories)
     if [[ -d "$dir" ]]; then
-        # Find files/directories excluding .git, .autoo, and their contents
+        # Find files/directories excluding .git, .auto, .autok, .automaker, .autoo, and their contents
         local has_files=$(find "$dir" -mindepth 1 -maxdepth 1 \
             ! -name '.git' \
+            ! -name '.auto' \
+            ! -name '.autok' \
+            ! -name '.automaker' \
             ! -name '.autoo' \
             ! -name '.DS_Store' \
             ! -name 'node_modules' \
@@ -201,8 +225,9 @@ is_existing_codebase() {
     return 1  # False - empty or new directory
 }
 
-# Check if spec is required (only for new projects or when .autoo/spec.txt doesn't exist)
+# Check if spec is required (only for new projects or when metadata dir doesn't have spec.txt)
 NEEDS_SPEC=false
+METADATA_DIR=$(find_or_create_metadata_dir "$PROJECT_DIR")
 if [[ ! -d "$PROJECT_DIR" ]] || ! is_existing_codebase "$PROJECT_DIR"; then
     NEEDS_SPEC=true
 fi
@@ -224,11 +249,11 @@ if [[ ! -d "$PROJECT_DIR" ]]; then
     # Copy both regular and hidden files
     find "$SCRIPT_DIR/scaffolding" -mindepth 1 -maxdepth 1 -exec cp -r {} "$PROJECT_DIR/" \;
 
-    # Copy artifacts contents to project's .autoo folder
-    echo "Copying artifacts to '$PROJECT_DIR/.autoo'..."
-    mkdir -p "$PROJECT_DIR/.autoo"
+    # Copy artifacts contents to project's metadata folder
+    echo "Copying artifacts to '$METADATA_DIR'..."
+    mkdir -p "$METADATA_DIR"
     # Copy all artifacts contents
-    find "$SCRIPT_DIR/artifacts" -mindepth 1 -maxdepth 1 -exec cp -r {} "$PROJECT_DIR/.autoo/" \;
+    find "$SCRIPT_DIR/artifacts" -mindepth 1 -maxdepth 1 -exec cp -r {} "$METADATA_DIR/" \;
 else
     # Check if this is an existing codebase
     if is_existing_codebase "$PROJECT_DIR"; then
@@ -243,11 +268,11 @@ if [[ -n "$SPEC_FILE" && ! -f "$SPEC_FILE" ]]; then
 fi
 
 # Define the paths to check
-SPEC_CHECK_PATH="$PROJECT_DIR/.autoo/spec.txt"
-FEATURE_LIST_CHECK_PATH="$PROJECT_DIR/.autoo/feature_list.json"
+SPEC_CHECK_PATH="$METADATA_DIR/spec.txt"
+FEATURE_LIST_CHECK_PATH="$METADATA_DIR/feature_list.json"
 
 # Iteration transcript logs
-ITERATIONS_DIR="$PROJECT_DIR/.autoo/iterations"
+ITERATIONS_DIR="$METADATA_DIR/iterations"
 mkdir -p "$ITERATIONS_DIR"
 
 get_next_log_index() {
@@ -269,19 +294,19 @@ get_next_log_index() {
     echo $((max + 1))
 }
 
-# Function to copy artifacts to .autoo directory
+# Function to copy artifacts to metadata directory
 copy_artifacts() {
     local project_dir="$1"
-    local project_autoo_dir="$project_dir/.autoo"
+    local project_metadata_dir=$(find_or_create_metadata_dir "$project_dir")
 
-    echo "Copying artifacts to '$project_autoo_dir'..."
-    mkdir -p "$project_autoo_dir"
+    echo "Copying artifacts to '$project_metadata_dir'..."
+    mkdir -p "$project_metadata_dir"
     # Copy all artifacts contents, but don't overwrite existing files
     for artifact in "$SCRIPT_DIR/artifacts"/*; do
         if [[ -e "$artifact" ]]; then
             local basename="$(basename "$artifact")"
-            if [[ ! -e "$project_autoo_dir/$basename" ]]; then
-                cp -r "$artifact" "$project_autoo_dir/"
+            if [[ ! -e "$project_metadata_dir/$basename" ]]; then
+                cp -r "$artifact" "$project_metadata_dir/"
             fi
         fi
     done
@@ -310,7 +335,7 @@ cleanup_logs() {
 # Set trap to clean logs on script exit (both normal and interrupted)
 trap cleanup_logs EXIT
 
-# Check for project_dir/.autoo/spec.txt
+# Check for metadata dir/spec.txt
 if [[ -z "$MAX_ITERATIONS" ]]; then
     echo "Running unlimited iterations (use Ctrl+C to stop)"
     i=1
@@ -335,7 +360,7 @@ if [[ -z "$MAX_ITERATIONS" ]]; then
 
             if [[ ! -f "$SPEC_CHECK_PATH" || ! -f "$FEATURE_LIST_CHECK_PATH" || "$ONBOARDING_COMPLETE" == false ]]; then
                 # Check if this is an existing codebase BEFORE copying spec
-                if [[ "$NEW_PROJECT_CREATED" == false ]] && is_existing_codebase "$PROJECT_DIR" && [[ ! -f "$PROJECT_DIR/.autoo/spec.txt" || ! -f "$PROJECT_DIR/.autoo/feature_list.json" || "$ONBOARDING_COMPLETE" == false ]]; then
+                if [[ "$NEW_PROJECT_CREATED" == false ]] && is_existing_codebase "$PROJECT_DIR" && [[ ! -f "$METADATA_DIR/spec.txt" || ! -f "$METADATA_DIR/feature_list.json" || "$ONBOARDING_COMPLETE" == false ]]; then
                     if [[ "$ONBOARDING_COMPLETE" == false ]]; then
                         echo "Detected incomplete onboarding, resuming onboarding prompt..."
                     else
@@ -366,14 +391,14 @@ if [[ -z "$MAX_ITERATIONS" ]]; then
             if [[ $OPENCODE_EXIT_CODE -ne 0 ]]; then
                 # Increment failure counter
                 ((CONSECUTIVE_FAILURES++))
-                echo "autoo.sh: opencode failed (exit=$OPENCODE_EXIT_CODE); this is failure #$CONSECUTIVE_FAILURES." >&2
+                echo "aidd-o.sh: opencode failed (exit=$OPENCODE_EXIT_CODE); this is failure #$CONSECUTIVE_FAILURES." >&2
 
                 # Check if we should quit or continue
                 if [[ $QUIT_ON_ABORT -gt 0 && $CONSECUTIVE_FAILURES -ge $QUIT_ON_ABORT ]]; then
-                    echo "autoo.sh: reached failure threshold ($QUIT_ON_ABORT); quitting." >&2
+                    echo "aidd-o.sh: reached failure threshold ($QUIT_ON_ABORT); quitting." >&2
                     exit "$OPENCODE_EXIT_CODE"
                 else
-                    echo "autoo.sh: continuing to next iteration (threshold: $QUIT_ON_ABORT)." >&2
+                    echo "aidd-o.sh: continuing to next iteration (threshold: $QUIT_ON_ABORT)." >&2
                 fi
             else
                 # Reset failure counter on successful iteration
@@ -416,7 +441,7 @@ else
 
             if [[ ! -f "$SPEC_CHECK_PATH" || ! -f "$FEATURE_LIST_CHECK_PATH" || "$ONBOARDING_COMPLETE" == false ]]; then
                 # Check if this is an existing codebase BEFORE copying spec
-                if [[ "$NEW_PROJECT_CREATED" == false ]] && is_existing_codebase "$PROJECT_DIR" && [[ ! -f "$PROJECT_DIR/.autoo/spec.txt" || ! -f "$PROJECT_DIR/.autoo/feature_list.json" || "$ONBOARDING_COMPLETE" == false ]]; then
+                if [[ "$NEW_PROJECT_CREATED" == false ]] && is_existing_codebase "$PROJECT_DIR" && [[ ! -f "$METADATA_DIR/spec.txt" || ! -f "$METADATA_DIR/feature_list.json" || "$ONBOARDING_COMPLETE" == false ]]; then
                     if [[ "$ONBOARDING_COMPLETE" == false ]]; then
                         echo "Detected incomplete onboarding, resuming onboarding prompt..."
                     else
@@ -447,14 +472,14 @@ else
             if [[ $OPENCODE_EXIT_CODE -ne 0 ]]; then
                 # Increment failure counter
                 ((CONSECUTIVE_FAILURES++))
-                echo "autoo.sh: opencode failed (exit=$OPENCODE_EXIT_CODE); this is failure #$CONSECUTIVE_FAILURES." >&2
+                echo "aidd-o.sh: opencode failed (exit=$OPENCODE_EXIT_CODE); this is failure #$CONSECUTIVE_FAILURES." >&2
 
                 # Check if we should quit or continue
                 if [[ $QUIT_ON_ABORT -gt 0 && $CONSECUTIVE_FAILURES -ge $QUIT_ON_ABORT ]]; then
-                    echo "autoo.sh: reached failure threshold ($QUIT_ON_ABORT); quitting." >&2
+                    echo "aidd-o.sh: reached failure threshold ($QUIT_ON_ABORT); quitting." >&2
                     exit "$OPENCODE_EXIT_CODE"
                 else
-                    echo "autoo.sh: continuing to next iteration (threshold: $QUIT_ON_ABORT)." >&2
+                    echo "aidd-o.sh: continuing to next iteration (threshold: $QUIT_ON_ABORT)." >&2
                 fi
             else
                 # Reset failure counter on successful iteration

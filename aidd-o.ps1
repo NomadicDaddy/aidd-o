@@ -38,7 +38,7 @@ param(
 
 # Show help if requested
 if ($Help) {
-	Write-Host 'Usage: autoo.ps1 -ProjectDir <dir> [-Spec <file>] [-MaxIterations <num>] [-Timeout <seconds>] [-IdleTimeout <seconds>] [-Model <model>] [-InitModel <model>] [-CodeModel <model>] [-NoClean] [-QuitOnAbort <num>] [-Help]'
+	Write-Host 'Usage: aidd-o.ps1 -ProjectDir <dir> [-Spec <file>] [-MaxIterations <num>] [-Timeout <seconds>] [-IdleTimeout <seconds>] [-Model <model>] [-InitModel <model>] [-CodeModel <model>] [-NoClean] [-QuitOnAbort <num>] [-Help]'
 	Write-Host ''
 	Write-Host 'Options:'
 	Write-Host '  -ProjectDir       Project directory (required)'
@@ -63,6 +63,34 @@ if ($ProjectDir -eq '') {
 	exit 1
 }
 
+# Function to find or create metadata directory
+function Find-OrCreateMetadataDir {
+	param(
+		[Parameter(Mandatory = $true)]
+		[string]$Directory
+	)
+
+	# Check for existing directories in order of preference
+	$autoDir = Join-Path $Directory '.auto'
+	if (Test-Path $autoDir -PathType Container) {
+		return $autoDir
+	}
+
+	$autokDir = Join-Path $Directory '.autok'
+	if (Test-Path $autokDir -PathType Container) {
+		return $autokDir
+	}
+
+	$automakerDir = Join-Path $Directory '.automaker'
+	if (Test-Path $automakerDir -PathType Container) {
+		return $automakerDir
+	}
+
+	# Create .auto as default
+	New-Item -Path $autoDir -ItemType Directory -Force | Out-Null
+	return $autoDir
+}
+
 # Function to check if directory is an existing codebase
 function Test-ExistingCodebase {
 	param(
@@ -73,7 +101,7 @@ function Test-ExistingCodebase {
 	if (Test-Path $Directory -PathType Container) {
 		# Check if directory has files excluding common ignored directories
 		$hasFiles = Get-ChildItem -Path $Directory -Force | Where-Object {
-			$_.Name -notin @('.git', '.autoo', '.DS_Store', 'node_modules', '.vscode', '.idea')
+			$_.Name -notin @('.git', '.auto', '.autok', '.automaker', '.autoo', '.DS_Store', 'node_modules', '.vscode', '.idea')
 		} | Measure-Object | Select-Object -ExpandProperty Count
 
 		return $hasFiles -gt 0
@@ -81,8 +109,9 @@ function Test-ExistingCodebase {
 	return $false
 }
 
-# Check if spec is required (only for new/empty project directories)
+# Check if spec is required (only for new projects or when metadata dir doesn't have spec.txt)
 $NeedsSpec = $false
+$MetadataDir = Find-OrCreateMetadataDir -Directory $ProjectDir
 if ((-not (Test-Path $ProjectDir -PathType Container)) -or (-not (Test-ExistingCodebase -Directory $ProjectDir))) {
 	$NeedsSpec = $true
 }
@@ -98,9 +127,6 @@ if ($InitModel -ne '') { $effectiveInitModel = $InitModel }
 
 $effectiveCodeModel = $Model
 if ($CodeModel -ne '') { $effectiveCodeModel = $CodeModel }
-
-$noAssistantPattern = 'The model returned no assistant messages'
-$providerErrorPattern = 'Provider returned error'
 
 function Invoke-OpenCodePrompt {
 	param(
@@ -129,7 +155,7 @@ function Invoke-OpenCodePrompt {
 	$completed = Wait-Job -Job $job -Timeout $Timeout
 
 	if (-not $completed) {
-		Write-Error "autoo.ps1: timeout (${Timeout}s) waiting for opencode to complete; aborting."
+		Write-Error "aidd-o.ps1: timeout (${Timeout}s) waiting for opencode to complete; aborting."
 		Remove-Job -Job $job -Force
 		return 73
 	}
@@ -187,22 +213,22 @@ function Clear-IterationLogs {
 	}
 }
 
-# Function to copy artifacts to .autoo directory
+# Function to copy artifacts to metadata directory
 function Copy-Artifacts {
 	param(
 		[Parameter(Mandatory = $true)]
 		[string]$ProjectDir
 	)
 
-	Write-Host "Copying artifacts to '$ProjectDir/.autoo'..."
+	$ProjectMetadataDir = Find-OrCreateMetadataDir -Directory $ProjectDir
+	Write-Host "Copying artifacts to '$ProjectMetadataDir'..."
 	$ArtifactsSource = Join-Path $PSScriptRoot 'artifacts'
-	$ProjectautooDir = Join-Path $ProjectDir '.autoo'
-	New-Item -ItemType Directory -Path $ProjectautooDir -Force | Out-Null
+	New-Item -ItemType Directory -Path $ProjectMetadataDir -Force | Out-Null
 	# Copy all artifacts contents, but don't overwrite existing files
 	Get-ChildItem -Path $ArtifactsSource -Force | ForEach-Object {
-		$DestinationPath = Join-Path $ProjectautooDir $_.Name
+		$DestinationPath = Join-Path $ProjectMetadataDir $_.Name
 		if (-not (Test-Path $DestinationPath)) {
-			Copy-Item -Path $_.FullName -Destination $ProjectautooDir -Recurse
+			Copy-Item -Path $_.FullName -Destination $ProjectMetadataDir -Recurse
 		}
 	}
 }
@@ -232,14 +258,13 @@ if (-not (Test-Path $ProjectDir -PathType Container)) {
 		Copy-Item -Path $_.FullName -Destination $ProjectDir -Recurse -Force
 	}
 
-	# Copy artifacts contents to project's .autoo folder
-	Write-Host "Copying artifacts to '$ProjectDir/.autoo'..."
+	# Copy artifacts contents to project's metadata folder
+	Write-Host "Copying artifacts to '$MetadataDir'..."
 	$ArtifactsSource = Join-Path $PSScriptRoot 'artifacts'
-	$ProjectautooDir = Join-Path $ProjectDir '.autoo'
-	New-Item -ItemType Directory -Path $ProjectautooDir -Force | Out-Null
+	New-Item -ItemType Directory -Path $MetadataDir -Force | Out-Null
 	# Copy all artifacts contents
 	Get-ChildItem -Path $ArtifactsSource -Force | ForEach-Object {
-		Copy-Item -Path $_.FullName -Destination $ProjectautooDir -Recurse -Force
+		Copy-Item -Path $_.FullName -Destination $MetadataDir -Recurse -Force
 	}
 } else {
 	$script:NewProjectCreated = $false
@@ -256,17 +281,17 @@ if ($Spec -ne '' -and (-not (Test-Path $Spec -PathType Leaf))) {
 }
 
 # Define the paths to check
-$SpecCheckPath = Join-Path $ProjectDir '.autoo/spec.txt'
-$FeatureListCheckPath = Join-Path $ProjectDir '.autoo/feature_list.json'
+$SpecCheckPath = Join-Path $MetadataDir 'spec.txt'
+$FeatureListCheckPath = Join-Path $MetadataDir 'feature_list.json'
 
 # Iteration transcript logs
-$IterationsDir = Join-Path $ProjectDir '.autoo/iterations'
+$IterationsDir = Join-Path $MetadataDir 'iterations'
 New-Item -ItemType Directory -Path $IterationsDir -Force | Out-Null
 $NextLogIndex = Get-NextIterationLogIndex -IterationsDir $IterationsDir
 
 $ConsecutiveFailures = 0
 
-# Check for project_dir/.autoo/spec.txt
+# Check for metadata dir/spec.txt
 try {
 	if ($MaxIterations -eq 0) {
 		Write-Host 'Running unlimited iterations (use Ctrl+C to stop)'
@@ -294,7 +319,7 @@ try {
 
 				$opencodeExitCode = 0
 				if (-not (Test-Path $SpecCheckPath -PathType Leaf) -or -not (Test-Path $FeatureListCheckPath -PathType Leaf) -or -not $OnboardingComplete) {
-					if ((-not $script:NewProjectCreated) -and (Test-ExistingCodebase -Directory $ProjectDir) -and ((-not (Test-Path "$ProjectDir/.autoo/spec.txt" -PathType Leaf)) -or (-not (Test-Path "$ProjectDir/.autoo/feature_list.json" -PathType Leaf)) -or -not $OnboardingComplete)) {
+					if ((-not $script:NewProjectCreated) -and (Test-ExistingCodebase -Directory $ProjectDir) -and ((-not (Test-Path "$MetadataDir/spec.txt" -PathType Leaf)) -or (-not (Test-Path "$MetadataDir/feature_list.json" -PathType Leaf)) -or -not $OnboardingComplete)) {
 						if (-not $OnboardingComplete) {
 							Write-Host 'Detected incomplete onboarding, resuming onboarding prompt...'
 						} else {
@@ -317,12 +342,12 @@ try {
 
 				if ($opencodeExitCode -ne 0) {
 					$ConsecutiveFailures++
-					Write-Error "autoo.ps1: opencode failed (exit=$opencodeExitCode); this is failure #$ConsecutiveFailures."
+					Write-Error "aidd-o.ps1: opencode failed (exit=$opencodeExitCode); this is failure #$ConsecutiveFailures."
 					if ($QuitOnAbort -gt 0 -and $ConsecutiveFailures -ge $QuitOnAbort) {
-						Write-Error "autoo.ps1: reached failure threshold ($QuitOnAbort); quitting."
+						Write-Error "aidd-o.ps1: reached failure threshold ($QuitOnAbort); quitting."
 						exit $opencodeExitCode
 					}
-					Write-Error "autoo.ps1: continuing to next iteration (threshold: $QuitOnAbort)."
+					Write-Error "aidd-o.ps1: continuing to next iteration (threshold: $QuitOnAbort)."
 				} else {
 					$ConsecutiveFailures = 0
 				}
@@ -361,7 +386,7 @@ try {
 
 				$opencodeExitCode = 0
 				if (-not (Test-Path $SpecCheckPath -PathType Leaf) -or -not (Test-Path $FeatureListCheckPath -PathType Leaf) -or -not $OnboardingComplete) {
-					if ((-not $script:NewProjectCreated) -and (Test-ExistingCodebase -Directory $ProjectDir) -and ((-not (Test-Path "$ProjectDir/.autoo/spec.txt" -PathType Leaf)) -or (-not (Test-Path "$ProjectDir/.autoo/feature_list.json" -PathType Leaf)) -or -not $OnboardingComplete)) {
+					if ((-not $script:NewProjectCreated) -and (Test-ExistingCodebase -Directory $ProjectDir) -and ((-not (Test-Path "$MetadataDir/spec.txt" -PathType Leaf)) -or (-not (Test-Path "$MetadataDir/feature_list.json" -PathType Leaf)) -or -not $OnboardingComplete)) {
 						if (-not $OnboardingComplete) {
 							Write-Host 'Detected incomplete onboarding, resuming onboarding prompt...'
 						} else {
@@ -384,12 +409,12 @@ try {
 
 				if ($opencodeExitCode -ne 0) {
 					$ConsecutiveFailures++
-					Write-Error "autoo.ps1: opencode failed (exit=$opencodeExitCode); this is failure #$ConsecutiveFailures."
+					Write-Error "aidd-o.ps1: opencode failed (exit=$opencodeExitCode); this is failure #$ConsecutiveFailures."
 					if ($QuitOnAbort -gt 0 -and $ConsecutiveFailures -ge $QuitOnAbort) {
-						Write-Error "autoo.ps1: reached failure threshold ($QuitOnAbort); quitting."
+						Write-Error "aidd-o.ps1: reached failure threshold ($QuitOnAbort); quitting."
 						exit $opencodeExitCode
 					}
-					Write-Error "autoo.ps1: continuing to next iteration (threshold: $QuitOnAbort)."
+					Write-Error "aidd-o.ps1: continuing to next iteration (threshold: $QuitOnAbort)."
 				} else {
 					$ConsecutiveFailures = 0
 				}
