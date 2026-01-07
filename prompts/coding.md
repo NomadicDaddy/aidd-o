@@ -23,11 +23,11 @@ You are in Code mode and ready to continue work on a long-running autonomous dev
 
 1. **Check for Assistant Rule Files:**
     - Look for and read the following files in order of priority:
-      - `.windsurf/rules/best-practices.md`
-      - `.windsurf/rules/style.md`
-      - `.windsurf/rules/user.md`
-      - `AGENTS.md`
-      - `CLAUDE.md`
+        - `.windsurf/rules/best-practices.md`
+        - `.windsurf/rules/style.md`
+        - `.windsurf/rules/user.md`
+        - `AGENTS.md`
+        - `CLAUDE.md`
     - These files contain important project rules, guidelines, and conventions
     - If any of these files exist, read them immediately before continuing
 
@@ -222,6 +222,7 @@ Before selecting a feature, you MUST read the feature from `/.aidd/feature_list.
 3. Record this in your initial assessment document
 
 **FEATURE SELECTION PRIORITY:**
+
 - First, filter to features with "passes": false
 - Group by priority (critical > high > medium > low)
 - Within each priority level, prefer features with "status": "in_progress" over features with "status": "open"

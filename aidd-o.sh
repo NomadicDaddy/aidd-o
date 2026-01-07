@@ -432,12 +432,12 @@ if [[ -z "$MAX_ITERATIONS" ]]; then
 
             OPENCODE_EXIT_CODE=$?
             if [[ $OPENCODE_EXIT_CODE -ne 0 ]]; then
-            # Handle signal termination (124 = SIGINT or timeout kill)
-            if [[  -eq 124 ]]; then
-                # User aborted or process killed - terminate script
-                echo "aidd-o.sh: opencode terminated by signal (exit=124); aborting script." >&2
-                exit 
-            fi
+                # Check if exit code is signal termination (124 = SIGINT or timeout kill)
+                if [[ $OPENCODE_EXIT_CODE -eq 124 ]]; then
+                    # Signal termination - treat as abort, NOT as failure
+                    echo "aidd-o.sh: opencode terminated by signal (exit=124); aborting script." >&2
+                    exit 124
+                fi
                 # Increment failure counter
                 ((CONSECUTIVE_FAILURES++))
                 echo "aidd-o.sh: opencode failed (exit=$OPENCODE_EXIT_CODE); this is failure #$CONSECUTIVE_FAILURES." >&2
@@ -504,18 +504,18 @@ else
             else
                 # New project without spec file - use initializer
                 echo "No spec provided, sending initializer prompt..."
-            # Handle signal termination (124 = SIGINT or timeout kill)
-            if [[  -eq 124 ]]; then
-                # User aborted or process killed - terminate script
-                echo "aidd-o.sh: opencode terminated by signal (exit=124); aborting script." >&2
-                exit 
-            fi
                 copy_artifacts "$PROJECT_DIR"
                 run_opencode_prompt "$PROJECT_DIR" "$SCRIPT_DIR/prompts/initializer.md" "${INIT_MODEL_ARGS[@]}"
             fi
 
             OPENCODE_EXIT_CODE=$?
             if [[ $OPENCODE_EXIT_CODE -ne 0 ]]; then
+                # Check if exit code is signal termination (124 = SIGINT or timeout kill)
+                if [[ $OPENCODE_EXIT_CODE -eq 124 ]]; then
+                    # Signal termination - treat as abort, NOT as failure
+                    echo "aidd-o.sh: opencode terminated by signal (exit=124); aborting script." >&2
+                    exit 124
+                fi
                 # Increment failure counter
                 ((CONSECUTIVE_FAILURES++))
                 echo "aidd-o.sh: opencode failed (exit=$OPENCODE_EXIT_CODE); this is failure #$CONSECUTIVE_FAILURES." >&2

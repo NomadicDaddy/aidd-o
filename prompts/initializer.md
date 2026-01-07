@@ -14,11 +14,11 @@ You are in Code mode and ready to begin setting up the foundation for all future
 
 1. **Check for Assistant Rule Files:**
     - Look for and read the following files in order of priority:
-      - `.windsurf/rules/best-practices.md`
-      - `.windsurf/rules/style.md`
-      - `.windsurf/rules/user.md`
-      - `AGENTS.md`
-      - `CLAUDE.md`
+        - `.windsurf/rules/best-practices.md`
+        - `.windsurf/rules/style.md`
+        - `.windsurf/rules/user.md`
+        - `AGENTS.md`
+        - `CLAUDE.md`
     - These files contain important project rules, guidelines, and conventions
     - If any of these files exist, read them immediately before continuing
 
