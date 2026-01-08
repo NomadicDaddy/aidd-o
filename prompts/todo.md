@@ -236,6 +236,7 @@ If any tooling command fails (linting, type checking, formatting, etc.), you MUS
     - Fix them once and avoid repeated warnings
 
 **Example Fix:**
+
 ```bash
 # If ESLint config is missing:
 # Create .eslintrc.js with appropriate rules
@@ -296,10 +297,13 @@ Use `browser_action` to navigate and test through the UI:
 
 ```markdown
 # Before
+
 - [ ] Fix login form validation
 
 # After (removed completely)
+
 # Or (marked complete)
+
 - [x] Fix login form validation [✅ DONE 2026-01-07]
 ```
 

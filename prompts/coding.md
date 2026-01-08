@@ -18,6 +18,7 @@ You are in Code mode and ready to continue work on a long-running autonomous dev
 3. Do not run any blocking processes else you will get stuck.
 
 **CRITICAL: Never start blocking dev servers inline**
+
 - Check if a dev server is already running before starting one (e.g., `lsof -ti:5173` or check if port responds)
 - If a dev server MUST be started, run it in the background with `&` and wait briefly for startup
 - NEVER run commands like `npm run dev`, `vite`, `next dev`, etc. directly - they block indefinitely
@@ -210,6 +211,7 @@ If any tooling command fails (linting, type checking, formatting, etc.), you MUS
     - Fix them once and avoid repeated warnings
 
 **Example Fix:**
+
 ```bash
 # If ESLint config is missing:
 # Create .eslintrc.js with appropriate rules
@@ -273,6 +275,7 @@ For example, if this were a chat app, you should perform a test that logs into t
     - Do NOT continue to feature implementation
 
 **Example:**
+
 ```bash
 # Count unimplemented features
 grep -c '"passes": false' .aidd/feature_list.json
