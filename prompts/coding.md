@@ -13,7 +13,7 @@ You are in Code mode and ready to continue work on a long-running autonomous dev
 
 ### HARD CONSTRAINTS
 
-1. **Do not run** `scripts/setup.ts`. Setup was performed by the initializer session.
+1. **Do not run** `scripts/setup.ts` or any other setup scripts. Setup was performed by the initializer session, if needed.
 2. If there is a **blocking ambiguity** or missing requirements, **stop** and record the question in `/.aidd/progress.md`.
 3. Do not run any blocking processes else you will get stuck.
 

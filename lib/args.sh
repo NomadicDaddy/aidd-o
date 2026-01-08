@@ -13,6 +13,7 @@ export IDLE_TIMEOUT=""
 export NO_CLEAN=false
 export QUIT_ON_ABORT="0"
 export SHOW_FEATURE_LIST=false
+export TODO_MODE=false
 
 # Print help/usage information
 print_help() {
@@ -32,7 +33,8 @@ OPTIONS:
     --code-model MODEL      Model for coding prompts (optional, overrides --model)
     --no-clean              Skip log cleaning on exit (optional)
     --quit-on-abort N       Quit after N consecutive failures (optional, default: 0=continue indefinitely)
-    --feature-list          Display project feature list status and exit (optional)
+     --feature-list          Display project feature list status and exit (optional)
+    --todo                  Use TODO mode: look for and complete todo items instead of new features (optional)
     --help                  Show this help message
 
 EXAMPLES:
@@ -40,6 +42,7 @@ EXAMPLES:
     $0 --project-dir ./myproject --model gpt-4 --max-iterations 5
     $0 --project-dir ./myproject --init-model claude --code-model gpt-4 --no-clean
     $0 --project-dir ./myproject --feature-list
+    $0 --project-dir ./myproject --todo
 
 For more information, visit: https://github.com/example/aidd-o
 EOF
@@ -93,6 +96,10 @@ parse_args() {
                 SHOW_FEATURE_LIST=true
                 shift
                 ;;
+            --todo)
+                TODO_MODE=true
+                shift
+                ;;
             -h|--help)
                 print_help
                 exit 0
@@ -108,8 +115,8 @@ parse_args() {
 
 # Validate required arguments
 validate_args() {
-    # Check required --project-dir argument (unless --feature-list is specified)
-    if [[ "$SHOW_FEATURE_LIST" != true && -z "$PROJECT_DIR" ]]; then
+    # Check required --project-dir argument (unless --feature-list or --todo is specified)
+    if [[ "$SHOW_FEATURE_LIST" != true && "$TODO_MODE" != true && -z "$PROJECT_DIR" ]]; then
         echo "Error: Missing required argument --project-dir" >&2
         echo "Use --help for usage information"
         return 1
@@ -280,6 +287,10 @@ init_args() {
         show_feature_list "$PROJECT_DIR"
         exit 0
     fi
+    
+    # Handle --todo option (export mode flag for use by main script)
+    # TODO_MODE is handled by determine_prompt() in lib/iteration.sh
+    # We just need to pass through and let iteration.sh handle it
     
     return 0
 }

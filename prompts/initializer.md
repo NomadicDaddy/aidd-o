@@ -2,6 +2,15 @@
 
 You are in Code mode and ready to begin setting up the foundation for all future development sessions.
 
+### QUICK REFERENCES
+
+- **Spec (source of truth):** `/.aidd/spec.txt`
+- **Architecture map:** `/.aidd/project_structure.md`
+- **Feature tests checklist:** `/.aidd/feature_list.json`
+- **Todo list:** `/.aidd/todo.md`
+- **Progress log:** `/.aidd/progress.md`
+- **Project overrides (highest priority):** `/.aidd/project.txt`
+
 ### HARD CONSTRAINTS
 
 1. **Stop after initialization.** Do not implement product features.

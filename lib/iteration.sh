@@ -333,6 +333,21 @@ determine_prompt() {
     local metadata_dir="$3"
     local spec_check_path="$metadata_dir/spec.txt"
     local feature_list_check_path="$metadata_dir/feature_list.json"
+    local todo_check_path="$metadata_dir/todo.md"
+    
+    # Check for TODO mode first
+    if [[ "$TODO_MODE" == true ]]; then
+        # Check if todo.md exists
+        if [[ -f "$todo_check_path" ]]; then
+            log_info "Using todo.md to complete existing work items"
+            PROMPT_PATH="$script_dir/prompts/todo.md"
+            PROMPT_TYPE="todo"
+            return 0
+        else
+            log_error "No todo.md found in project directory"
+            return 1
+        fi
+    fi
 
     if [[ "$ONBOARDING_COMPLETE" == true ]] && [[ -f "$feature_list_check_path" ]]; then
         # Onboarding is complete, ready for coding
