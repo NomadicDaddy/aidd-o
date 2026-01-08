@@ -179,9 +179,43 @@ Understanding the `/.aidd/spec.txt` is critical - it contains the full requireme
 
 The previous session may have introduced bugs. Before implementing anything new, you MUST run verification tests.
 
-Verification tests do NOT imply you should stop, start, restart, or otherwise manage project services. Assume services are already running unless the user explicitly tells you otherwise.
+Verification tests do NOT imply you should stop, start, restart, or otherwise manage project services. Assume services are already running unless user explicitly tells you otherwise.
 If you believe a service restart is required, ask for explicit user approval first and provide the exact command you want the user to run.
 Always follow `/.aidd/project.txt` overrides if present.
+
+**CRITICAL: FIX TOOLING FAILURES IMMEDIATELY**
+
+If any tooling command fails (linting, type checking, formatting, etc.), you MUST fix it immediately before proceeding:
+
+1. **Identify the Issue:**
+    - Read the error message carefully
+    - Understand what is missing or misconfigured
+    - Example: "ESLint couldn't find a configuration file"
+
+2. **Fix the Issue:**
+    - Add missing configuration files (e.g., `.eslintrc.js`, `eslint.config.js`)
+    - Install missing dependencies if needed
+    - Correct misconfiguration in existing files
+    - Follow project-specific conventions from assistant rule files
+
+3. **Verify the Fix:**
+    - Re-run the failing tooling command
+    - Confirm it now passes
+    - Commit the fix as part of session work
+
+4. **Never Ignore Tooling Failures:**
+    - Even if the feature works, tooling failures must be fixed
+    - Missing configurations prevent future development
+    - Tooling issues will be reported in every session until fixed
+    - Fix them once and avoid repeated warnings
+
+**Example Fix:**
+```bash
+# If ESLint config is missing:
+# Create .eslintrc.js with appropriate rules
+# Re-run: npm run lint
+# Commit: git add .eslintrc.js && git commit -m "Add ESLint configuration"
+```
 
 **ADDITIONAL SPEC COMPLIANCE VERIFICATION:**
 
@@ -214,6 +248,36 @@ For example, if this were a chat app, you should perform a test that logs into t
     - Missing hover states
     - Console errors
 - **CRITICAL:** Also fix any spec-implementation mismatches discovered during the audit
+
+### STEP 5.5: EARLY TERMINATION CHECK
+
+**CRITICAL: Before proceeding to feature work, check if project is already complete.**
+
+1. **Check for Remaining Work:**
+    - Count features in `/.aidd/feature_list.json` with `"passes": false`
+    - Check if `/.aidd/todo.md` exists and contains incomplete items
+    - If BOTH conditions are true:
+        - Zero features with `"passes": false`
+        - No incomplete todo items exist
+    - **TERMINATE SESSION IMMEDIATELY** with success message
+
+2. **Early Termination Conditions:**
+    - All features in `feature_list.json` marked as passing
+    - No remaining work items in `todo.md`
+    - All verification tests passing
+    - Project is production-ready
+
+3. **Exit Cleanly:**
+    - Document completion status in `/.aidd/progress.md`
+    - Exit with code 0 to signal successful completion
+    - Do NOT continue to feature implementation
+
+**Example:**
+```bash
+# Count unimplemented features
+grep -c '"passes": false' .aidd/feature_list.json
+# If result is 0 and todo.md is empty/missing, exit
+```
 
 ### STEP 6: CHOOSE ONE FEATURE TO IMPLEMENT
 
